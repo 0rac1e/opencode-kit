@@ -1,0 +1,197 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": true,
+  "instructions": [
+    "AGENTS.md",
+    "PROJECT-KNOWLEDGE.md",
+    ".opencode/rules/*.md"
+  ],
+  "permission": {
+    "edit": "allow",
+    "bash": {
+      "*": "ask",
+      "make *": "allow",
+      "go test *": "allow",
+      "go generate *": "allow",
+      "go list *": "allow",
+      "go build *": "allow",
+      "go fmt *": "allow",
+      "go vet *": "allow",
+      "go mod *": "allow",
+      "git status *": "allow",
+      "git diff *": "allow",
+      "git log *": "allow",
+      "git branch *": "allow",
+      "git checkout *": "allow",
+      "git add *": "allow",
+      "git commit *": "allow",
+      "git stash *": "allow",
+      "git rev-parse *": "allow",
+      "git show *": "allow",
+      "ls *": "allow",
+      "cat *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "wc *": "allow",
+      "find *": "allow",
+      "echo *": "allow",
+      "mkdir *": "allow",
+      "cp *": "allow",
+      "mv *": "allow",
+      "sed *": "allow",
+      "awk *": "allow",
+      "sort *": "allow",
+      "touch *": "allow",
+      "tree *": "allow",
+      "rm -rf *": "deny",
+      "rm -fr *": "deny",
+      "git reset --hard *": "deny",
+      "git clean *": "deny",
+      "git push --force *": "deny",
+      "git push -f *": "deny",
+      "git checkout .": "deny",
+      "git restore .": "deny",
+      "sudo *": "deny",
+      "chmod 777 *": "deny",
+      "chmod 0777 *": "deny",
+      "dd if=*": "deny",
+      "mkfs.*": "deny",
+      "truncate *": "deny"
+    },
+    "webfetch": "ask",
+    "skill": {
+      "*": "allow"
+    },
+    "task": {
+      "*": "allow"
+    }
+  },
+  "agent": {
+    "build": {
+      "mode": "primary",
+      "description": "Full development work with all tools enabled",
+      "permission": {
+        "edit": "allow",
+        "bash": {
+          "*": "ask",
+          "make *": "allow",
+          "go test *": "allow",
+          "go generate *": "allow",
+          "go list *": "allow",
+          "go build *": "allow",
+          "go fmt *": "allow",
+          "go vet *": "allow",
+          "go mod *": "allow",
+          "git status *": "allow",
+          "git diff *": "allow",
+          "git log *": "allow",
+          "git branch *": "allow",
+          "git checkout *": "allow",
+          "git add *": "allow",
+          "git commit *": "allow",
+          "git stash *": "allow",
+          "git rev-parse *": "allow",
+          "git show *": "allow"
+        }
+      }
+    },
+    "plan": {
+      "mode": "primary",
+      "description": "Analysis and planning without making changes",
+      "permission": {
+        "edit": "ask",
+        "bash": {
+          "*": "ask",
+          "ls *": "allow",
+          "cat *": "allow",
+          "head *": "allow",
+          "tail *": "allow",
+          "git status *": "allow",
+          "git diff *": "allow",
+          "git log *": "allow",
+          "git branch *": "allow",
+          "git show *": "allow"
+        }
+      }
+    },
+    "plan-reviewer": {
+      "mode": "subagent",
+      "description": "Reviews implementation plans for architecture compliance, completeness, and security. Use when a plan needs validation before coding begins.",
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "deny",
+          "ls *": "allow",
+          "cat *": "allow",
+          "head *": "allow",
+          "tail *": "allow",
+          "git status *": "allow",
+          "git diff *": "allow",
+          "git log *": "allow",
+          "git show *": "allow"
+        }
+      }
+    },
+    "code-reviewer": {
+      "mode": "subagent",
+      "description": "Reviews code changes for architecture compliance, security, error handling, and test coverage. Use when code needs review before merge.",
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "deny",
+          "ls *": "allow",
+          "cat *": "allow",
+          "head *": "allow",
+          "tail *": "allow",
+          "git status *": "allow",
+          "git diff *": "allow",
+          "git log *": "allow",
+          "git show *": "allow"
+        }
+      }
+    },
+    "code-researcher": {
+      "mode": "subagent",
+      "description": "Read-only codebase exploration agent. Use for searching patterns, analyzing existing implementations, and mapping import graphs.",
+      "permission": {
+        "edit": "deny",
+        "bash": {
+          "*": "deny",
+          "ls *": "allow",
+          "cat *": "allow",
+          "head *": "allow",
+          "tail *": "allow",
+          "find *": "allow",
+          "grep *": "allow"
+        }
+      }
+    }
+  },
+  "command": {
+    "workflow": {
+      "template": "Execute the full development workflow: task-analysis → planner → plan-review → coder → code-review. Load workflow-protocols skill first.",
+      "description": "Full development cycle: task-analysis → planner → plan-review → coder → code-review",
+      "agent": "build",
+    },
+    "planner": {
+      "template": "Research codebase and create detailed implementation plan. Load planner-rules skill first.",
+      "description": "Researches codebase and creates detailed implementation plan",
+      "agent": "plan",
+    },
+    "coder": {
+      "template": "Implement code strictly per approved plan. Load coder-rules skill first.",
+      "description": "Implements code strictly per approved plan",
+      "agent": "build",
+    },
+    "project-researcher": {
+      "template": "Autonomous agent for deep codebase analysis: architecture, dependencies, and DB schema. Generates PROJECT-KNOWLEDGE.md.",
+      "description": "Project analysis: architecture, dependencies, DB schema",
+      "agent": "plan",
+    },
+    "review-checklist": {
+      "template": "Display the code review checklist: architecture, security (OWASP), code quality, performance.",
+      "description": "Display code review checklist",
+      "agent": "plan",
+    }
+  }
+}

@@ -1,0 +1,336 @@
+---
+name: workflow
+description: "Full development cycle: task-analysis → [/designer (L/XL)] → planner → plan-review (agent) → coder → code-review (agent)"
+agent: build
+model: anthropic/claude-sonnet-4-5
+---
+
+role:
+  identity: "Orchestrator"
+  owns: "Coordination of full development cycle: task-analysis → planner → plan-review (agent) → coder → code-review (agent)"
+  does_not_own: "Planning, implementation, review — delegates to sub-commands and agents"
+  output_contract: "Implemented, tested, and reviewed code with commit + pipeline metrics"
+  success_criteria: "All phases completed, handoff contracts fulfilled, checkpoint saved, metrics recorded"
+  style: "Sequential phases with user confirmation between each phase"
+
+## TRIGGERS
+triggers:
+  - if: "Task requires full development cycle (planning + implementation + review)"
+    then: "Use /workflow instead of individual commands"
+
+  - if: "Phase verdict is REJECTED, NEEDS_CHANGES, or CHANGES_REQUESTED"
+    then: "Return to previous phase, do NOT skip ahead"
+
+  - if: "User says 'stop' or 'pause'"
+    then: "Stop immediately, save current state for --from-phase resume"
+
+  - if: "Tests fail 3x consecutively in Phase 3"
+    then: "Stop, request manual intervention"
+
+  - if: "Review cycle exceeds 3 iterations (plan-review or code-review)"
+    then: "STOP immediately, show iteration summary, request user help"
+
+## INPUT
+input:
+  arguments:
+    - name: task
+      required: true
+      format: "Text"
+      example: "Add new functionality"
+
+    - name: --auto
+      required: false
+      format: flag
+      description: "Autonomous mode without confirmations"
+
+    - name: --from-phase
+      required: false
+      format: "0.7|1-4"
+      description: "Resume from specified phase (0.7=Design, 1=Planning, 2=Plan Review, 3=Implementation, 4=Code Review)"
+
+  examples:
+    - "/workflow Add new endpoint"
+    - "/workflow --auto Implement resource update"
+    - "/workflow --from-phase 3"
+
+## OUTPUT
+output:
+  phases:
+    - phase: Design
+      produces: Approved design spec
+      location: ".opencode/prompts/{feature}-spec.md"
+      note: "L/XL only. S/M skip to Planning."
+
+    - phase: Planning
+      produces: Implementation plan
+      location: ".opencode/prompts/{feature}.md"
+
+    - phase: Plan Review
+      produces: Verdict + issues
+      location: Console (via plan-reviewer agent)
+
+    - phase: Implementation
+      produces: Working code + tests
+      location: Source files
+
+    - phase: Code Review
+      produces: Verdict + comments
+      location: Console (via code-reviewer agent)
+
+    - phase: Completion
+      produces: Git commit
+      location: Repository
+
+  final_output: "Implemented, tested, and reviewed code with commit."
+
+## AUTONOMY
+autonomy:
+  modes: "INTERACTIVE (default) | AUTONOMOUS (--auto) | RESUME (--from-phase N)"
+  stop: "REJECTED → stop | NEEDS_CHANGES/CHANGES_REQUESTED → previous phase | Tests 3x → stop | Loop 3x → stop"
+  continue: "Phase completed → next | NEEDS_CHANGES → previous phase"
+  details: "SEE [autonomy.md] in workflow-protocols skill"
+
+## MCP TOOLS
+mcp_tools:
+  reference: "SEE [mcp-tools.md] in planner-rules / coder-rules skill"
+  workflow_usage: "Sequential Thinking (complex orchestration)"
+
+## STARTUP
+startup:
+  critical: "On agent startup, IMMEDIATELY execute ALL steps"
+
+  steps:
+    - step: 0
+      action: "Task Analysis — task classification"
+      reference: "For details see [task-analysis.md] in planner-rules skill"
+      purpose: "Determine complexity (S/M/L/XL) and route BEFORE planning"
+      decisions:
+        S: "/planner --minimal → skip Phase 2 → /coder → code-reviewer (agent)"
+        M: "standard flow (all phases)"
+        L: "full flow + Sequential Thinking recommended"
+        XL: "full flow + Sequential Thinking REQUIRED"
+      warning: "MANDATORY! Wrong classification = wasted work"
+
+    - step: 0.2
+      action: "Route through /designer (L/XL only)"
+      condition: "complexity L or XL"
+      skip_when: "S/M complexity — designer adds overhead for simple tasks"
+      optional_when: "M complexity AND task_type is new_feature or integration — ask user"
+      note: "For M tasks of type new_feature/integration, ask user: 'This task may benefit from a design phase. Run /designer first?'"
+
+    - step: 0.1
+      action: "Load workflow-protocols skill"
+      files:
+        - ".opencode/skills/workflow-protocols/SKILL.md"
+      purpose: "Overview of handoff, checkpoint, re-routing, and metrics protocols. Supporting files loaded on-demand per event triggers."
+
+    - step: 1
+      action: "TodoWrite — create phase list (based on route from Task Analysis)"
+      items:
+        - "Phase 0: Get Task (completed — task received)"
+        - "Phase 0.5: Task Analysis (completed — already done in step 0)"
+        - "Phase 0.7: Design → /designer (pending — or skip if S/M)"
+        - "Phase 1: Planning (pending)"
+        - "Phase 2: Plan Review → plan-reviewer agent (pending — or skip if S-complexity)"
+        - "Phase 3: Implementation (pending)"
+        - "Phase 4: Code Review → code-reviewer agent (pending)"
+        - "Phase 5: Completion — commit + metrics (pending)"
+
+    - step: 2
+      action: "Check session recovery"
+      checks:
+        - "Does `.opencode/prompts/{feature}.md` exist? → can skip Phase 1"
+
+## PIPELINE
+pipeline:
+  mandatory: |
+    🔴 MANDATORY: Load skills BEFORE executing any phase:
+    - Workflow: workflow-protocols skill (step 0.1) — includes autonomy, orchestration-core
+    - Planner: planner-rules skill (step 0) — includes mcp-tools, sequential-thinking-guide
+    - Coder: coder-rules skill (step 0) — includes mcp-tools
+    NOTE: Plan Review and Code Review → agents/ with skills preloading (plan-review-rules, code-review-rules)
+    NOTE: Language profile + error handling → auto-loaded via AGENTS.md
+
+  flow: "task-analysis → /designer* → /planner [→ code-researcher*] → plan-reviewer (agent) → /coder [→ code-researcher*] → code-reviewer (agent)"
+  flow_note: "* /designer is Phase 0.7, activated for L/XL tasks only. S/M skip to /planner. code-researcher is optional tool-assist."
+
+  evaluate_note: |
+    /coder runs internal EVALUATE sub-phase (Phase 1.5) before implementing.
+    Outcomes:
+      PROCEED: plan is implementable → start implementation
+      REVISE: minor gaps, inline fixes → proceed with adjustments noted
+      RETURN: major gaps → re-route to Phase 1 (counts toward plan_review iteration counter)
+    On RETURN: orchestrator increments plan_review counter, writes checkpoint.
+    If spec exists (L/XL path): re-run /planner with coder feedback + original spec.
+    If no spec (S/M path): re-run /planner with coder feedback only.
+
+  simplify_note: |
+    /coder runs optional SIMPLIFY sub-phase (Phase 2.5) between IMPLEMENT and VERIFY.
+    Condition: complexity L/XL AND total_parts >= 5.
+    Runs /simplify on changed files to eliminate NIT/MINOR issues before code-review.
+    Guard: if simplify changes > 30% of lines touched → revert, proceed with original code.
+
+  load_phases:
+    - action: "Read .opencode/skills/workflow-protocols/autonomy.md"
+      when: "BEFORE starting Phase 0"
+      required: true
+    - action: "Read .opencode/skills/workflow-protocols/orchestration-core.md"
+      when: "ALWAYS — contains pipeline phases, loop limits, session recovery"
+      required: true
+      contains:
+        - Pipeline diagram with verdicts and routing
+        - Loop limits (max 3 iterations per review cycle, tracking protocol)
+        - Session recovery (checkpoint-first, heuristic fallback)
+
+  completion_notes:
+    - "Git commit created (MANDATORY)"
+
+## DELEGATION PROTOCOL
+delegation_protocol:
+  purpose: "How workflow delegates review phases to native agents/"
+  mechanism: "OpenCode auto-delegates based on agent description. Orchestrator forms delegation prompt with handoff context."
+  isolation_guarantee: "Agents run in clean context. AGENTS.md auto-loaded from project root. Parent conversation history is NOT passed."
+  reference: "SEE: pipeline.flow for quick route overview"
+
+  designer_delegation:
+    command: "/designer"
+    when: "Phase 0.7 — after task analysis, before /planner"
+    skip_when: "S/M complexity (direct to /planner)"
+    optional_when: "M complexity AND task_type in [new_feature, integration] — ask user"
+    context_to_pass:
+      - "Task description"
+      - "Complexity: L/XL"
+      - "Task type: {type}"
+    returns: "Approved spec file + handoff payload for /planner"
+    post_delegation: |
+      After /designer completion:
+      1. Verify spec file exists at .opencode/prompts/{feature}-spec.md
+      2. Verify status: approved in spec frontmatter
+      3. Write checkpoint: phase_completed=0.7, phase_name="design"
+      4. Pass designer handoff to /planner as additional input
+
+  plan_review_delegation:
+    agent: "plan-reviewer"
+    when: "Phase 2 — after /planner completion"
+    skip_when: "S-complexity route"
+    context_to_pass:
+      - "Artifact path: .opencode/prompts/{feature}.md"
+      - "Planner handoff narrative (SEE: handoff_protocol)"
+      - "Complexity: S/M/L/XL"
+      - "Iteration: N/3"
+    delegation_prompt_template: |
+      Review the implementation plan at .opencode/prompts/{feature}.md
+
+      [Context from planner]:
+      - Planner completed: {task type and complexity}
+      - Key decisions: {list from handoff.key_decisions}
+      - Known risks: {list from handoff.known_risks}
+      - Recommendations: focus on {handoff.areas_needing_attention}
+
+      Iteration: {N}/3
+    returns: "Verdict (APPROVED/NEEDS_CHANGES/REJECTED) + issues + handoff for coder"
+    post_delegation: |
+      After receiving plan-reviewer output:
+      1. Validate output (SEE output_validation)
+      2. Extract verdict from VERDICT: header (first line)
+      3. Write checkpoint: phase_completed=2, verdict={extracted_verdict}
+      4. If verdict is INCOMPLETE → follow output_validation.on_incomplete_output
+
+  code_review_delegation:
+    agent: "code-reviewer"
+    when: "Phase 4 — after /coder completion"
+    isolation: "worktree — agent sees only committed changes. Ensure git commit before delegating."
+    context_to_pass:
+      - "Branch: current branch (code-reviewer runs git diff internally in worktree)"
+      - "Coder handoff narrative (SEE: handoff_protocol)"
+      - "Complexity: S/M/L/XL"
+      - "Iteration: N/3"
+      - "Verify status: lint PASS/FAIL, test PASS/FAIL (from coder VERIFY phase)"
+      - "Spec check result: status, coverage, issues (from coder Phase 3.5)"
+    delegation_prompt_template: |
+      Review code changes on the current branch.
+
+      [Context from coder]:
+      - Coder implemented: {N Parts per plan}
+      - Evaluate adjustments: {list from handoff.evaluate_adjustments}
+      - Deviations from plan: {list from handoff.deviations_from_plan}
+      - Mitigated risks: {list from handoff.risks_mitigated}
+      - Verify: lint {PASS/FAIL}, test {PASS/FAIL} (command: {verify_command})
+      - Spec check: {PASS|PARTIAL|FAIL} (coverage: {pct}%, issues: {N})
+
+      Iteration: {N}/3
+    returns: "Verdict (APPROVED/APPROVED_WITH_COMMENTS/CHANGES_REQUESTED) + issues + handoff for completion"
+    post_delegation: |
+      After receiving code-reviewer output:
+      1. Validate output (SEE output_validation)
+      2. Extract verdict from VERDICT: header (first line)
+      3. Write checkpoint: phase_completed=4, verdict={extracted_verdict}
+      4. If verdict is INCOMPLETE → follow output_validation.on_incomplete_output
+
+  fallback: "If agent delegation unavailable → fallback: re-read diff/plan in parent context (degraded mode, loss of isolation)"
+
+  output_validation:
+    purpose: "Verify agent returned a usable verdict before proceeding"
+    when: "Immediately after receiving agent return (plan-reviewer or code-reviewer)"
+    severity: CRITICAL
+    checks:
+      - check: "First line should be VERDICT: followed by one of the verdict values"
+        look_for: "VERDICT: (case-insensitive) followed by APPROVED_WITH_COMMENTS, APPROVED, CHANGES_REQUESTED, NEEDS_CHANGES, or REJECTED"
+        on_missing: "INCOMPLETE_OUTPUT"
+      - check: "Return text contains handoff section"
+        pattern: "Handoff"
+        on_missing: "INCOMPLETE_OUTPUT — proceed with verdict only if found"
+
+    on_incomplete_output:
+      step_1: "SendMessage to the SAME agent (use agentId from return): 'Your output was incomplete. Provide ONLY the verdict and handoff now. Start your response with VERDICT: followed by the verdict value.'"
+      step_2: "If SendMessage returns verdict → extract it, proceed normally"
+      step_3: "If SendMessage fails or still no verdict → WARN user, show agent summary, ask for manual verdict decision"
+      max_retries: 1
+      note: "SendMessage preserves agent context — the agent still has the full review in memory. This is NOT a new agent launch."
+
+    common_causes:
+      - "Agent exhausted maxTurns on memory operations (SEE RULE_5 in agent artifacts)"
+      - "Agent got stuck in a long Sequential Thinking chain"
+      - "Agent produced output but in unexpected format"
+
+  code_researcher_usage:
+    agent: "code-researcher"
+    mechanism: "Agent tool (run_in_background supported) or Task tool — code-researcher is tool-assist, not pipeline phase"
+    invoked_by: "planner (Phase 3) and coder (Phase 1.5) — NOT by orchestrator"
+    when: "Multi-package codebase research needed, complexity L/XL"
+    skip_when: "S/M complexity, --minimal planner mode"
+    returns: "Structured summary ≤2000 tokens (patterns, files, imports, key snippets)"
+    background_mode:
+      when: "L/XL complexity in planner Phase 3 — large research scope"
+      mechanism: "Agent tool with run_in_background: true"
+      benefit: "Planner proceeds to DESIGN with direct research findings while code-researcher runs in parallel"
+      integration: "Results checked at async_integration_point in planner DESIGN phase"
+      revision: "If late findings contradict design decisions → inline revision (≤1 part) or re-evaluate (>1 part)"
+      reference: "SEE planner.md complex_search.background_mode + phase_4_design.async_integration_point"
+    checkpoint_impact: "None — research is part of Phase 1/3, not a separate phase"
+    note: "Differs from plan-reviewer/code-reviewer: those are pipeline-phase agents invoked by orchestrator via native delegation. code-researcher is a tool-agent invoked by sub-commands via Agent/Task tool."
+
+## RULES
+rules:
+  - "Sequential execution — phases sequentially, not in parallel"
+  - "No skip phases (except Phase 2 for S-complexity)"
+  - "Context isolation — review via agents/ (clean context, handoff via delegation)"
+  - "Loop limits → SEE orchestration-core.md (max 3 iterations per cycle)"
+
+## ERROR HANDLING
+error_handling:
+  common: "SEE AGENTS.md (MCP unavailable, tests 3x fail)"
+  workflow_specific:
+    - "Loop limit exceeded (3 iterations) → STOP, show summary, request user help"
+    - "User says 'stop' → Stop immediately, await instructions"
+    - "REJECTED/NEEDS_CHANGES/CHANGES_REQUESTED → return to previous phase (SEE pipeline)"
+
+## SKILL REFERENCES
+skill_references:
+  workflow-protocols:
+    - "session-recovery → orchestration-core.md (auto-detect, decision table)"
+    - "checkpoint → checkpoint-protocol.md (12 YAML fields, recovery)"
+    - "re-routing → re-routing.md (3 triggers, tracking, learning)"
+    - "pipeline-metrics → pipeline-metrics.md (load at completion phase)"
+    - "examples → examples-troubleshooting.md (on-demand when issues arise)"
+    - "handoff → handoff-protocol.md (4 contracts, narrative casting)"
